@@ -41,7 +41,7 @@ async def db_session(postgres_url: str) -> AsyncIterator[AsyncSession]:
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
     try:
-        async with AsyncSession(engine) as s:
+        async with AsyncSession(engine, expire_on_commit=False) as s:
             yield s
             await s.rollback()
     finally:

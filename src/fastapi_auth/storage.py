@@ -75,7 +75,7 @@ async def rotate_session(
     old_token_plain: str,
     lifetime: timedelta,
 ) -> tuple[str, Session]:
-    old = await _get_session_by_token(s, old_token_plain)
+    old = await get_session_by_token(s, old_token_plain)
 
     if old is None:
         raise SessionReuseError("unknown token")
@@ -108,7 +108,7 @@ async def revoke_session(
     s: AsyncSession,
     token_plain: str,
 ) -> None:
-    session = await _get_session_by_token(s, token_plain)
+    session = await get_session_by_token(s, token_plain)
 
     if session and session.revoked_at is None:
         session.revoked_at = datetime.now(UTC)
@@ -129,7 +129,7 @@ async def revoke_all_sessions(
     await s.flush()
 
 
-async def _get_session_by_token(
+async def get_session_by_token(
     s: AsyncSession,
     token_plain: str,
 ) -> Session | None:
