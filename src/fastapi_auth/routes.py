@@ -20,10 +20,13 @@ from fastapi_auth.schemas import (
     UserPublic,
 )
 from fastapi_auth.storage import (
+    SessionReuseError,
     create_session,
     create_user,
     get_user_by_email,
+    get_user_by_id,
     revoke_session,
+    rotate_session,
 )
 from fastapi_auth.transport import attach_token, clear_cookie, extract_token
 
@@ -88,5 +91,31 @@ def include_auth_router(app: FastAPI, config: AuthConfig) -> None:
     @router.get("/me")
     async def me(user: AuthUser = Depends(user_dep)) -> UserPublic:
         return UserPublic(id=user.id, email=user.email)
+
+    @router.post("/refresh")
+    async def refresh(
+        request: Request,
+        response: Response,
+        s: AsyncSession = Depends(config.db_session_dep),
+    ) -> AuthResponse:
+        token = extract_token(request, config)
+        if not token:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+        try:
+            new_token, new_session = await rotate_session(
+                s, token, config.session_lifetime
+            )
+        except SessionReuseError:
+            # rotate_session may have revoked the family already — persist that.
+            await s.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+        user = await get_user_by_id(s, new_session.user_id, config)
+        if user is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+        await s.commit()
+        attach_token(response, new_token, config)
+        return AuthResponse(
+            token=new_token, user=UserPublic(id=user.id, email=user.email)
+        )
 
     app.include_router(router)

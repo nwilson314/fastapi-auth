@@ -173,3 +173,79 @@ class TestLogout:
     async def test_no_token_still_204(self, client: AsyncClient) -> None:
         r = await client.post("/auth/logout")
         assert r.status_code == 204
+
+
+class TestRefresh:
+    async def test_happy_path(self, client: AsyncClient) -> None:
+        body = await _register(client)
+        old_token = body["token"]
+        client.cookies.clear()
+        r = await client.post(
+            "/auth/refresh",
+            headers={"Authorization": f"Bearer {old_token}"},
+        )
+        assert r.status_code == 200
+        new_token = r.json()["token"]
+        assert new_token != old_token
+        # Old token is dead.
+        r = await client.get(
+            "/auth/me", headers={"Authorization": f"Bearer {old_token}"}
+        )
+        assert r.status_code == 401
+        # New token is alive.
+        r = await client.get(
+            "/auth/me", headers={"Authorization": f"Bearer {new_token}"}
+        )
+        assert r.status_code == 200
+
+    async def test_via_cookie(self, client: AsyncClient) -> None:
+        await _register(client)
+        r = await client.post("/auth/refresh")
+        assert r.status_code == 200
+
+    async def test_no_token_401(self, client: AsyncClient) -> None:
+        r = await client.post("/auth/refresh")
+        assert r.status_code == 401
+
+    async def test_garbage_token_401(self, client: AsyncClient) -> None:
+        r = await client.post(
+            "/auth/refresh",
+            headers={"Authorization": "Bearer not-real"},
+        )
+        assert r.status_code == 401
+
+    async def test_reuse_revokes_whole_family(
+        self, client: AsyncClient
+    ) -> None:
+        body = await _register(client)
+        t1 = body["token"]
+        client.cookies.clear()
+        r = await client.post(
+            "/auth/refresh", headers={"Authorization": f"Bearer {t1}"}
+        )
+        t2 = r.json()["token"]
+        r = await client.post(
+            "/auth/refresh", headers={"Authorization": f"Bearer {t2}"}
+        )
+        t3 = r.json()["token"]
+        # Attacker replays t1 — must 401 AND revoke t3 too.
+        r = await client.post(
+            "/auth/refresh", headers={"Authorization": f"Bearer {t1}"}
+        )
+        assert r.status_code == 401
+        r = await client.get(
+            "/auth/me", headers={"Authorization": f"Bearer {t3}"}
+        )
+        assert r.status_code == 401
+
+    async def test_revoked_token_401(self, client: AsyncClient) -> None:
+        body = await _register(client)
+        token = body["token"]
+        await client.post(
+            "/auth/logout", headers={"Authorization": f"Bearer {token}"}
+        )
+        client.cookies.clear()
+        r = await client.post(
+            "/auth/refresh", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 401

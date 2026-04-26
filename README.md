@@ -96,6 +96,7 @@ The `auth_sessions` table lives in `SQLModel.metadata` once `fastapi_auth.models
 | `POST` | `/auth/register` | `{email, password}` | `{token, user}` + cookie |
 | `POST` | `/auth/login` | `{email, password}` | `{token, user}` + cookie |
 | `POST` | `/auth/logout` | — | 204, clears cookie + revokes session |
+| `POST` | `/auth/refresh` | — | `{token, user}` + new cookie; rotates the session and detects reuse |
 | `GET`  | `/auth/me` | — | `{id, email}` |
 
 `/auth/me` returns the library-defined minimal user shape. For your custom user fields, write your own route using `Depends(current_user(config))`.
