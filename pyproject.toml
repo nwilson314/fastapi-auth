@@ -1,0 +1,32 @@
+[project]
+name = "fastapi-auth"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "nwilson314", email = "nsw.wilson@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "argon2-cffi>=25.1.0",
+    "black>=26.3.1",
+    "fastapi>=0.136.1",
+    "pyjwt>=2.12.1",
+    "sqlmodel>=0.0.38",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "asyncpg>=0.31.0",
+    "greenlet>=3.4.0",
+    "httpx>=0.28.1",
+    "mypy>=1.20.2",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.12",
+    "testcontainers[postgres]>=4.14.2",
+]
