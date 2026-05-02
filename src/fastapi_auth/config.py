@@ -15,7 +15,9 @@ class AuthConfig:
     secret_key: str
     user_model: type[AuthUser]
     db_session_dep: Callable[[], Awaitable[AsyncSession]]
+    send_password_reset: Callable[[AuthUser, str], Awaitable[None]]
     session_lifetime: timedelta = timedelta(days=30)
+    password_reset_lifetime: timedelta = timedelta(minutes=30)
     cookie_name: str = "session"
     cookie_domain: str | None = None
     cookie_secure: bool = True

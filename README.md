@@ -88,6 +88,8 @@ The `auth_sessions` table lives in `SQLModel.metadata` once `fastapi_auth.models
 | `cookie_domain` | `str \| None` | `None` | |
 | `cookie_secure` | `bool` | `True` | Set `False` only for local HTTP |
 | `cookie_samesite` | `str` | `"lax"` | `"lax"` / `"strict"` / `"none"` |
+| `send_password_reset` | `Callable[[AuthUser, str], Awaitable[None]]` | — | Required. Server-side hook called with `(user, reset_token)` when a reset is requested. See "Wiring password-reset emails" below. |
+| `password_reset_lifetime` | `timedelta` | `30 minutes` | Reset-token TTL |
 
 ## Endpoints (mounted by `include_auth_router`)
 
@@ -97,9 +99,35 @@ The `auth_sessions` table lives in `SQLModel.metadata` once `fastapi_auth.models
 | `POST` | `/auth/login` | `{email, password}` | `{token, user}` + cookie |
 | `POST` | `/auth/logout` | — | 204, clears cookie + revokes session |
 | `POST` | `/auth/refresh` | — | `{token, user}` + new cookie; rotates the session and detects reuse |
+| `POST` | `/auth/password-reset/request` | `{email}` | 204; invokes `send_password_reset` callback if the email exists |
+| `POST` | `/auth/password-reset/confirm` | `{token, new_password}` | 204; updates hash and revokes all sessions |
 | `GET`  | `/auth/me` | — | `{id, email}` |
 
 `/auth/me` returns the library-defined minimal user shape. For your custom user fields, write your own route using `Depends(current_user(config))`.
+
+## Wiring password-reset emails
+
+The library never sends email — you provide a server-side hook that does. The
+`/auth/password-reset/request` endpoint generates a short-lived JWT and invokes
+your callback; the token is **never** included in the HTTP response body.
+
+```python
+async def send_password_reset(user: User, token: str) -> None:
+    reset_url = f"https://yourapp.com/reset-password?token={token}"
+    await my_email_service.send(
+        to=user.email,
+        subject="Reset your password",
+        body=f"Click here: {reset_url}",
+    )
+
+config = AuthConfig(
+    ...,
+    send_password_reset=send_password_reset,
+)
+```
+
+The endpoint always returns `204` regardless of whether the email exists, to
+avoid leaking account presence. Your callback is only invoked for real users.
 
 ## Tests
 

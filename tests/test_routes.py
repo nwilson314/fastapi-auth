@@ -18,14 +18,25 @@ GOOD_PW = "correcthorsebatterystaple"
 
 
 @pytest_asyncio.fixture
-async def app(db_session: AsyncSession) -> FastAPI:
+async def reset_calls() -> list[tuple[Any, str]]:
+    return []
+
+
+@pytest_asyncio.fixture
+async def app(
+    db_session: AsyncSession, reset_calls: list[tuple[Any, str]]
+) -> FastAPI:
     async def _session_dep() -> AsyncIterator[AsyncSession]:
         yield db_session
+
+    async def _capture_reset(user: Any, token: str) -> None:
+        reset_calls.append((user, token))
 
     config = AuthConfig(
         secret_key="x" * 32,
         user_model=User,
         db_session_dep=_session_dep,
+        send_password_reset=_capture_reset,
         cookie_secure=False,  # tests run over plain HTTP
     )
     fastapi_app = FastAPI()
@@ -249,3 +260,139 @@ class TestRefresh:
             "/auth/refresh", headers={"Authorization": f"Bearer {token}"}
         )
         assert r.status_code == 401
+
+
+class TestPasswordResetRequest:
+    async def test_calls_callback_for_existing_user(
+        self,
+        client: AsyncClient,
+        reset_calls: list[tuple[Any, str]],
+    ) -> None:
+        await _register(client)
+        r = await client.post(
+            "/auth/password-reset/request",
+            json={"email": "alice@example.com"},
+        )
+        assert r.status_code == 204
+        assert len(reset_calls) == 1
+        user, token = reset_calls[0]
+        assert user.email == "alice@example.com"
+        assert isinstance(token, str) and token.count(".") == 2
+
+    async def test_does_not_leak_unknown_email(
+        self,
+        client: AsyncClient,
+        reset_calls: list[tuple[Any, str]],
+    ) -> None:
+        r = await client.post(
+            "/auth/password-reset/request",
+            json={"email": "ghost@example.com"},
+        )
+        assert r.status_code == 204
+        assert reset_calls == []
+
+    async def test_response_body_empty(self, client: AsyncClient) -> None:
+        await _register(client)
+        r = await client.post(
+            "/auth/password-reset/request",
+            json={"email": "alice@example.com"},
+        )
+        assert r.status_code == 204
+        assert r.content == b""
+
+
+class TestPasswordResetConfirm:
+    async def test_updates_password(
+        self,
+        client: AsyncClient,
+        reset_calls: list[tuple[Any, str]],
+    ) -> None:
+        await _register(client)
+        await client.post(
+            "/auth/password-reset/request",
+            json={"email": "alice@example.com"},
+        )
+        token = reset_calls[0][1]
+        r = await client.post(
+            "/auth/password-reset/confirm",
+            json={"token": token, "new_password": "newcorrecthorse"},
+        )
+        assert r.status_code == 204
+        # Old password fails
+        r = await client.post(
+            "/auth/login",
+            json={"email": "alice@example.com", "password": GOOD_PW},
+        )
+        assert r.status_code == 401
+        # New password works
+        r = await client.post(
+            "/auth/login",
+            json={
+                "email": "alice@example.com",
+                "password": "newcorrecthorse",
+            },
+        )
+        assert r.status_code == 200
+
+    async def test_revokes_existing_sessions(
+        self,
+        client: AsyncClient,
+        reset_calls: list[tuple[Any, str]],
+    ) -> None:
+        body = await _register(client)
+        old_session_token = body["token"]
+        await client.post(
+            "/auth/password-reset/request",
+            json={"email": "alice@example.com"},
+        )
+        reset_token = reset_calls[0][1]
+        await client.post(
+            "/auth/password-reset/confirm",
+            json={"token": reset_token, "new_password": "newcorrecthorse"},
+        )
+        client.cookies.clear()
+        r = await client.get(
+            "/auth/me",
+            headers={"Authorization": f"Bearer {old_session_token}"},
+        )
+        assert r.status_code == 401
+
+    async def test_invalid_token_400(self, client: AsyncClient) -> None:
+        r = await client.post(
+            "/auth/password-reset/confirm",
+            json={"token": "garbage", "new_password": "newcorrecthorse"},
+        )
+        assert r.status_code == 400
+
+    async def test_expired_token_400(self, client: AsyncClient) -> None:
+        from datetime import timedelta
+        from uuid import uuid4
+
+        from fastapi_auth.tokens import create_password_reset_token
+
+        # secret_key matches the test fixture
+        token = create_password_reset_token(
+            uuid4(), "x" * 32, timedelta(seconds=-1)
+        )
+        r = await client.post(
+            "/auth/password-reset/confirm",
+            json={"token": token, "new_password": "newcorrecthorse"},
+        )
+        assert r.status_code == 400
+
+    async def test_min_password_length_422(
+        self,
+        client: AsyncClient,
+        reset_calls: list[tuple[Any, str]],
+    ) -> None:
+        await _register(client)
+        await client.post(
+            "/auth/password-reset/request",
+            json={"email": "alice@example.com"},
+        )
+        token = reset_calls[0][1]
+        r = await client.post(
+            "/auth/password-reset/confirm",
+            json={"token": token, "new_password": "short"},
+        )
+        assert r.status_code == 422

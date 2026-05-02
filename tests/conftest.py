@@ -20,12 +20,17 @@ async def _unused_session_dep() -> AsyncSession:  # pragma: no cover
     raise RuntimeError("not used in storage-layer tests")
 
 
+async def _no_send(user: AuthUser, token: str) -> None:  # noqa: ARG001
+    pass
+
+
 @pytest.fixture
 def auth_config() -> AuthConfig:
     return AuthConfig(
         secret_key="x" * 32,
         user_model=User,
         db_session_dep=_unused_session_dep,
+        send_password_reset=_no_send,
     )
 
 

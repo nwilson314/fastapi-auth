@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -16,6 +18,8 @@ from fastapi_auth.models import AuthUser
 from fastapi_auth.schemas import (
     AuthResponse,
     LoginRequest,
+    PasswordResetConfirm,
+    PasswordResetRequest,
     RegisterRequest,
     UserPublic,
 )
@@ -25,8 +29,14 @@ from fastapi_auth.storage import (
     create_user,
     get_user_by_email,
     get_user_by_id,
+    revoke_all_sessions,
     revoke_session,
     rotate_session,
+)
+from fastapi_auth.tokens import (
+    InvalidPasswordResetToken,
+    create_password_reset_token,
+    verify_password_reset_token,
 )
 from fastapi_auth.transport import attach_token, clear_cookie, extract_token
 
@@ -117,5 +127,44 @@ def include_auth_router(app: FastAPI, config: AuthConfig) -> None:
         return AuthResponse(
             token=new_token, user=UserPublic(id=user.id, email=user.email)
         )
+
+    @router.post(
+        "/password-reset/request", status_code=status.HTTP_204_NO_CONTENT
+    )
+    async def password_reset_request(
+        body: PasswordResetRequest,
+        s: AsyncSession = Depends(config.db_session_dep),
+    ) -> None:
+        user = await get_user_by_email(s, body.email, config)
+        if user is None:
+            # Don't leak account existence — silent success.
+            return
+        token = create_password_reset_token(
+            user.id, config.secret_key, config.password_reset_lifetime
+        )
+        await config.send_password_reset(user, token)
+
+    @router.post(
+        "/password-reset/confirm", status_code=status.HTTP_204_NO_CONTENT
+    )
+    async def password_reset_confirm(
+        body: PasswordResetConfirm,
+        s: AsyncSession = Depends(config.db_session_dep),
+    ) -> None:
+        try:
+            user_id = verify_password_reset_token(body.token, config.secret_key)
+        except InvalidPasswordResetToken:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "invalid or expired token"
+            )
+        user = await get_user_by_id(s, user_id, config)
+        if user is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "invalid or expired token"
+            )
+        user.password_hash = hash_password(body.new_password)
+        user.updated_at = datetime.now(UTC)
+        await revoke_all_sessions(s, user.id)
+        await s.commit()
 
     app.include_router(router)
