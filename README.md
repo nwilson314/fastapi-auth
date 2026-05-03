@@ -295,6 +295,23 @@ config = AuthConfig(..., send_password_reset=send_password_reset)
 
 ---
 
+## Rate limiting
+
+The library does **not** rate-limit any endpoints. You should layer rate
+limiting on top — at minimum on `/auth/login` (brute-force defense) and
+`/auth/password-reset/request` (email-bombing / account harvesting). Common
+options:
+
+- A reverse proxy (nginx, Caddy) with per-IP limits on `/auth/*`
+- [`slowapi`](https://github.com/laurentS/slowapi) or
+  [`fastapi-limiter`](https://github.com/long2ice/fastapi-limiter) as
+  middleware
+- Per-account lockouts after N failed logins (you'd track this in your `User`
+  table or a separate `login_attempts` table)
+
+Recommended starting point: 10 requests/minute/IP on `/auth/login` and
+3 requests/hour/email on `/auth/password-reset/request`.
+
 ## Tests
 
 Tests use `testcontainers[postgres]` — Docker must be running.

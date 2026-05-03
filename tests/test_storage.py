@@ -231,3 +231,64 @@ class TestRevokeAllSessions:
         await revoke_all_sessions(db_session, user.id)
         await db_session.refresh(sess)
         assert sess.revoked_at == original
+
+
+class TestRotationRaceProtection:
+    async def test_index_blocks_two_children_per_parent(
+        self, db_session: AsyncSession, auth_config: AuthConfig
+    ) -> None:
+        # Two children of the same parent must collide regardless of
+        # whether the first is revoked.
+        user = await _make_user(db_session, auth_config)
+        _, parent = await create_session(db_session, user.id, timedelta(days=1))
+
+        child1 = Session(
+            user_id=user.id,
+            token_hash="hash-child-1",
+            family_id=parent.family_id,
+            parent_id=parent.id,
+            expires_at=datetime.now(UTC) + timedelta(days=1),
+        )
+        db_session.add(child1)
+        await db_session.flush()
+
+        child2 = Session(
+            user_id=user.id,
+            token_hash="hash-child-2",
+            family_id=parent.family_id,
+            parent_id=parent.id,
+            expires_at=datetime.now(UTC) + timedelta(days=1),
+        )
+        db_session.add(child2)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+
+    async def test_index_blocks_second_child_even_when_first_is_revoked(
+        self, db_session: AsyncSession, auth_config: AuthConfig
+    ) -> None:
+        # The reviewer's expanded race: even if the first child gets
+        # revoked, no second child of the same parent may be inserted.
+        user = await _make_user(db_session, auth_config)
+        _, parent = await create_session(db_session, user.id, timedelta(days=1))
+
+        child1 = Session(
+            user_id=user.id,
+            token_hash="hash-child-1",
+            family_id=parent.family_id,
+            parent_id=parent.id,
+            expires_at=datetime.now(UTC) + timedelta(days=1),
+            revoked_at=datetime.now(UTC),  # already revoked
+        )
+        db_session.add(child1)
+        await db_session.flush()
+
+        child2 = Session(
+            user_id=user.id,
+            token_hash="hash-child-2",
+            family_id=parent.family_id,
+            parent_id=parent.id,
+            expires_at=datetime.now(UTC) + timedelta(days=1),
+        )
+        db_session.add(child2)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()

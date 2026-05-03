@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
@@ -21,7 +21,7 @@ class AuthConfig:
     cookie_name: str = "session"
     cookie_domain: str | None = None
     cookie_secure: bool = True
-    cookie_samesite: str = "lax"
+    cookie_samesite: Literal["lax", "strict", "none"] = "lax"
 
     def __post_init__(self) -> None:
         if len(self.secret_key.encode("utf-8")) < 32:

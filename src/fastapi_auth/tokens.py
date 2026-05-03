@@ -21,11 +21,17 @@ class InvalidPasswordResetToken(Exception):
     pass
 
 
-def create_password_reset_token(user_id: UUID, secret_key: str, ttl: timedelta) -> str:
+def create_password_reset_token(
+    user_id: UUID,
+    secret_key: str,
+    ttl: timedelta,
+    password_version: int = 0,
+) -> str:
     now = datetime.now(UTC)
     payload = {
         "sub": str(user_id),
         "purpose": _PURPOSE,
+        "pwv": password_version,
         "iat": now,
         "exp": now + ttl,
     }
@@ -33,7 +39,8 @@ def create_password_reset_token(user_id: UUID, secret_key: str, ttl: timedelta) 
     return jwt.encode(payload, secret_key, algorithm=_ALGORITHM)
 
 
-def verify_password_reset_token(token: str, secret_key: str) -> UUID:
+def verify_password_reset_token(token: str, secret_key: str) -> tuple[UUID, int]:
+    """Returns (user_id, password_version) on success."""
     try:
         claims = jwt.decode(token, secret_key, algorithms=[_ALGORITHM])
     except jwt.PyJWTError as e:
@@ -42,6 +49,12 @@ def verify_password_reset_token(token: str, secret_key: str) -> UUID:
         raise InvalidPasswordResetToken("Invalid purpose")
 
     try:
-        return UUID(claims["sub"])
+        user_id = UUID(claims["sub"])
     except (KeyError, ValueError) as e:
         raise InvalidPasswordResetToken("malformed sub claim") from e
+
+    pwv = claims.get("pwv")
+    if not isinstance(pwv, int):
+        raise InvalidPasswordResetToken("missing or malformed pwv claim")
+
+    return user_id, pwv

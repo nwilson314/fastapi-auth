@@ -99,6 +99,31 @@ class TestRegister:
         )
         assert r.status_code == 422
 
+    async def test_email_is_case_insensitive(
+        self, client: AsyncClient
+    ) -> None:
+        # Register with mixed case, login with different mixed case → success.
+        r = await client.post(
+            "/auth/register",
+            json={"email": "Alice@Example.com", "password": GOOD_PW},
+        )
+        assert r.status_code == 201
+        r = await client.post(
+            "/auth/login",
+            json={"email": "ALICE@example.COM", "password": GOOD_PW},
+        )
+        assert r.status_code == 200
+
+    async def test_duplicate_email_different_case_409(
+        self, client: AsyncClient
+    ) -> None:
+        await _register(client, email="alice@example.com")
+        r = await client.post(
+            "/auth/register",
+            json={"email": "ALICE@EXAMPLE.COM", "password": GOOD_PW},
+        )
+        assert r.status_code == 409
+
 
 class TestLogin:
     async def test_correct_password(self, client: AsyncClient) -> None:
@@ -396,3 +421,26 @@ class TestPasswordResetConfirm:
             json={"token": token, "new_password": "short"},
         )
         assert r.status_code == 422
+
+    async def test_token_is_single_use(
+        self,
+        client: AsyncClient,
+        reset_calls: list[tuple[Any, str]],
+    ) -> None:
+        # First confirm succeeds; replay of the same token must 400.
+        await _register(client)
+        await client.post(
+            "/auth/password-reset/request",
+            json={"email": "alice@example.com"},
+        )
+        token = reset_calls[0][1]
+        r = await client.post(
+            "/auth/password-reset/confirm",
+            json={"token": token, "new_password": "newcorrecthorse"},
+        )
+        assert r.status_code == 204
+        r = await client.post(
+            "/auth/password-reset/confirm",
+            json={"token": token, "new_password": "anothernewpw1"},
+        )
+        assert r.status_code == 400

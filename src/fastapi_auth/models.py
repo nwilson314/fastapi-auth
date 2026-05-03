@@ -1,7 +1,7 @@
 from datetime import datetime, UTC
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime
+from sqlalchemy import Column, DateTime, Index, text
 from sqlmodel import Field, SQLModel
 
 
@@ -23,11 +23,14 @@ class AuthUser(SQLModel):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     email: str = Field(unique=True, index=True)
     password_hash: str = Field(nullable=False)
+    password_version: int = Field(default=0, nullable=False)
     created_at: datetime = Field(
-        default_factory=_utcnow, sa_type=DateTime(timezone=True)
+        default_factory=_utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
     )
     updated_at: datetime = Field(
-        default_factory=_utcnow, sa_type=DateTime(timezone=True)
+        default_factory=_utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
 
@@ -41,9 +44,27 @@ class Session(SQLModel, table=True):
     family_id: UUID = Field(index=True)
     parent_id: UUID | None = Field(default=None)
     created_at: datetime = Field(
-        default_factory=_utcnow, sa_type=DateTime(timezone=True)
+        default_factory=_utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
     )
-    expires_at: datetime = Field(sa_type=DateTime(timezone=True))
+    expires_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
     revoked_at: datetime | None = Field(
-        default=None, sa_type=DateTime(timezone=True)
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
+    __table_args__ = (
+        # A session can be the parent of at most one child, ever.
+        # (Revoked children still count — once a parent is rotated, it's
+        # rotated permanently. Concurrent rotation attempts of the same
+        # parent collide on this index even if the winning child is later
+        # revoked.)
+        Index(
+            "uniq_child_per_parent",
+            "parent_id",
+            unique=True,
+            postgresql_where=text("parent_id IS NOT NULL"),
+        ),
     )

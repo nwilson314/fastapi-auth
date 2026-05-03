@@ -2,7 +2,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlmodel import select
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from fastapi_auth.config import AuthConfig
@@ -16,7 +17,9 @@ async def get_user_by_email(
     config: AuthConfig,
 ) -> AuthUser | None:
     result = await s.exec(
-        select(config.user_model).where(config.user_model.email == email)
+        select(config.user_model).where(
+            config.user_model.email == email.lower()
+        )
     )
 
     return result.first()
@@ -38,7 +41,9 @@ async def create_user(
     password_hash: str,
     **extra: Any,
 ) -> AuthUser:
-    user = config.user_model(email=email, password_hash=password_hash, **extra)
+    user = config.user_model(
+        email=email.lower(), password_hash=password_hash, **extra
+    )
 
     s.add(user)
     await s.flush()
@@ -100,7 +105,13 @@ async def rotate_session(
 
     old.revoked_at = datetime.now(UTC)
     s.add(new)
-    await s.flush()
+    try:
+        await s.flush()
+    except IntegrityError:
+        # Another rotation already produced a child for this parent
+        # (unique index on parent_id — one child per parent, ever).
+        await s.rollback()
+        raise SessionReuseError("concurrent rotation")
     return plaintext, new
 
 
@@ -120,7 +131,9 @@ async def revoke_all_sessions(
     user_id: UUID,
 ) -> None:
     result = await s.exec(
-        select(Session).where(Session.user_id == user_id, Session.revoked_at.is_(None))
+        select(Session).where(
+            Session.user_id == user_id, col(Session.revoked_at).is_(None)
+        )
     )
 
     now = datetime.now(UTC)
@@ -144,7 +157,7 @@ async def _revoke_family(
 ) -> None:
     result = await s.exec(
         select(Session).where(
-            Session.family_id == family_id, Session.revoked_at.is_(None)
+            Session.family_id == family_id, col(Session.revoked_at).is_(None)
         )
     )
 

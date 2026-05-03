@@ -124,7 +124,7 @@ class TestCreatePasswordResetToken:
 class TestVerifyPasswordResetToken:
     def test_roundtrip_returns_user_id(self, user_id: UUID, secret_key: str) -> None:
         token = create_password_reset_token(user_id, secret_key, timedelta(minutes=15))
-        assert verify_password_reset_token(token, secret_key) == user_id
+        assert verify_password_reset_token(token, secret_key) == (user_id, 0)
 
     def test_rejects_wrong_secret(self, user_id: UUID, secret_key: str) -> None:
         token = create_password_reset_token(user_id, secret_key, timedelta(minutes=15))
@@ -133,8 +133,11 @@ class TestVerifyPasswordResetToken:
 
     def test_rejects_tampered_signature(self, user_id: UUID, secret_key: str) -> None:
         token = create_password_reset_token(user_id, secret_key, timedelta(minutes=15))
-        # Flip the last character of the signature segment.
-        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        # Flip a character in the middle of the signature (not the last:
+        # base64url's last char only encodes 2 bits and can collide on decode).
+        head, _, sig = token.rpartition(".")
+        mid = len(sig) // 2
+        tampered = f"{head}.{sig[:mid]}{'A' if sig[mid] != 'A' else 'B'}{sig[mid + 1:]}"
         with pytest.raises(InvalidPasswordResetToken):
             verify_password_reset_token(tampered, secret_key)
 

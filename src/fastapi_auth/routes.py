@@ -9,6 +9,8 @@ from fastapi import (
     Response,
     status,
 )
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import col, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from fastapi_auth.config import AuthConfig
@@ -55,12 +57,20 @@ def include_auth_router(app: FastAPI, config: AuthConfig) -> None:
             raise HTTPException(
                 status.HTTP_409_CONFLICT, "email already registered"
             )
-        user = await create_user(
-            s,
-            config,
-            email=body.email,
-            password_hash=hash_password(body.password),
-        )
+        try:
+            user = await create_user(
+                s,
+                config,
+                email=body.email,
+                password_hash=hash_password(body.password),
+            )
+        except IntegrityError:
+            # Race: another request inserted the same email between our check
+            # and our flush. Roll back and surface the same 409.
+            await s.rollback()
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "email already registered"
+            )
         token, _ = await create_session(s, user.id, config.session_lifetime)
         await s.commit()
         attach_token(response, token, config)
@@ -140,7 +150,10 @@ def include_auth_router(app: FastAPI, config: AuthConfig) -> None:
             # Don't leak account existence — silent success.
             return
         token = create_password_reset_token(
-            user.id, config.secret_key, config.password_reset_lifetime
+            user.id,
+            config.secret_key,
+            config.password_reset_lifetime,
+            password_version=user.password_version,
         )
         await config.send_password_reset(user, token)
 
@@ -152,19 +165,33 @@ def include_auth_router(app: FastAPI, config: AuthConfig) -> None:
         s: AsyncSession = Depends(config.db_session_dep),
     ) -> None:
         try:
-            user_id = verify_password_reset_token(body.token, config.secret_key)
+            user_id, token_pwv = verify_password_reset_token(
+                body.token, config.secret_key
+            )
         except InvalidPasswordResetToken:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, "invalid or expired token"
             )
-        user = await get_user_by_id(s, user_id, config)
-        if user is None:
+        # Atomic single-use enforcement: row-level conditional UPDATE.
+        # Two concurrent confirms with the same token: one matches
+        # (rowcount=1), the other doesn't (rowcount=0).
+        result = await s.exec(
+            update(config.user_model)
+            .where(
+                col(config.user_model.id) == user_id,
+                col(config.user_model.password_version) == token_pwv,
+            )
+            .values(
+                password_hash=hash_password(body.new_password),
+                password_version=token_pwv + 1,
+                updated_at=datetime.now(UTC),
+            )
+        )
+        if result.rowcount == 0:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, "invalid or expired token"
             )
-        user.password_hash = hash_password(body.new_password)
-        user.updated_at = datetime.now(UTC)
-        await revoke_all_sessions(s, user.id)
+        await revoke_all_sessions(s, user_id)
         await s.commit()
 
     app.include_router(router)
